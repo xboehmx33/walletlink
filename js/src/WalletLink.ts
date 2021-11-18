@@ -9,6 +9,7 @@ import { WalletLinkProvider } from "./provider/WalletLinkProvider"
 import { WalletLinkSdkUI } from "./provider/WalletLinkSdkUI"
 import { WalletLinkUI, WalletLinkUIOptions } from "./provider/WalletLinkUI"
 import { WalletLinkRelay } from "./relay/WalletLinkRelay"
+import { WalletLinkRelayAbstract } from "./relay/WalletLinkRelayAbstract"
 import { WalletLinkRelayEventManager } from "./relay/WalletLinkRelayEventManager"
 import { getFavicon } from "./util"
 
@@ -47,7 +48,9 @@ export class WalletLink {
 
   private _appName = ""
   private _appLogoUrl: string | null = null
+  private _jsonRpcUrl: string | null = null
   private _relay: WalletLinkRelay | null = null
+  private _relayProvider: () => Promise<WalletLinkRelayAbstract>
   private _relayEventManager: WalletLinkRelayEventManager | null = null
   private _storage: ScopedLocalStorage
   private _overrideIsMetaMask: boolean
@@ -84,23 +87,60 @@ export class WalletLink {
 
     this._storage.setItem("version", WalletLink.VERSION)
 
-    if (typeof window.walletLinkExtension !== "undefined") {
-      return
+    const relayEventManager = new WalletLinkRelayEventManager()
+    this._relayEventManager = relayEventManager
+
+    const relayProvider = (): Promise<WalletLinkRelayAbstract> => {
+      //@ts-ignore
+      return new Promise(resolve => {
+        const id = new Uint8Array(16)
+        window.crypto.getRandomValues(id)
+
+        window.postMessage(
+          {
+            type: "extensionUIRequest",
+            data: {
+              id: id.toString(),
+              action: "loadWalletLinkRelay"
+            }
+          },
+          "*"
+        )
+
+        const timeout = setTimeout(() => {
+          const relay = new WalletLinkRelay({
+            walletLinkUrl: walletLinkUrl,
+            version: WALLETLINK_VERSION,
+            darkMode: !!options.darkMode,
+            walletLinkUIConstructor,
+            storage: this._storage,
+            relayEventManager: relayEventManager,
+            walletLinkAnalytics: this._walletLinkAnalytics
+          })
+
+          relay.attachUI()
+          relay.setAppInfo(this._appName, this._appLogoUrl || null)
+          if (!this._jsonRpcUrl) relay.setConnectDisabled(true)
+
+          this._relay = relay
+          return resolve(relay)
+        }, 500)
+
+        window.addEventListener("message", event => {
+          if (event.data.type !== "extensionUIResponse") return
+
+          if (event.data.data.action === "loadedWalletLinkRelay") {
+            clearTimeout(timeout)
+            //@ts-ignore
+            this._relay = window.walletLinkRelay
+            // @ts-ignore
+            resolve(window.walletLinkRelay)
+          }
+        })
+      })
     }
 
-    this._relayEventManager = new WalletLinkRelayEventManager()
-
-    this._relay = new WalletLinkRelay({
-      walletLinkUrl: walletLinkUrl,
-      version: WALLETLINK_VERSION,
-      darkMode: !!options.darkMode,
-      walletLinkUIConstructor,
-      storage: this._storage,
-      relayEventManager: this._relayEventManager,
-      walletLinkAnalytics: this._walletLinkAnalytics
-    })
-    this.setAppInfo(options.appName, options.appLogoUrl)
-    this._relay.attachUI()
+    this._relayProvider = relayProvider
   }
 
   /**
@@ -113,29 +153,15 @@ export class WalletLink {
     jsonRpcUrl: string = "",
     chainId: number = 1
   ): WalletLinkProvider {
-    if (typeof window.walletLinkExtension !== "undefined") {
-      if (
-        //@ts-ignore
-        typeof window.walletLinkExtension.isCipher !== "boolean" ||
-        //@ts-ignore
-        !window.walletLinkExtension.isCipher
-      ) {
-        //@ts-ignore
-        window.walletLinkExtension.setProviderInfo(jsonRpcUrl, chainId)
-      }
-
-      return window.walletLinkExtension
-    }
-
-    const relay = this._relay
-    if (!relay || !this._relayEventManager || !this._storage) {
+    const relayProvider = this._relayProvider
+    if (!relayProvider || !this._relayEventManager || !this._storage) {
       throw new Error("Relay not initialized, should never happen")
     }
 
-    if (!jsonRpcUrl) relay.setConnectDisabled(true)
+    this._jsonRpcUrl = jsonRpcUrl
 
     return new WalletLinkProvider({
-      relayProvider: () => Promise.resolve(relay),
+      relayProvider,
       relayEventManager: this._relayEventManager,
       storage: this._storage,
       jsonRpcUrl,
@@ -156,20 +182,7 @@ export class WalletLink {
   ): void {
     this._appName = appName || "DApp"
     this._appLogoUrl = appLogoUrl || getFavicon()
-
-    if (typeof window.walletLinkExtension !== "undefined") {
-      if (
-        //@ts-ignore
-        typeof window.walletLinkExtension.isCipher !== "boolean" ||
-        //@ts-ignore
-        !window.walletLinkExtension.isCipher
-      ) {
-        //@ts-ignore
-        window.walletLinkExtension.setAppInfo(this._appName, this._appLogoUrl)
-      }
-    } else {
-      this._relay?.setAppInfo(this._appName, this._appLogoUrl)
-    }
+    this._relay?.setAppInfo(this._appName, this._appLogoUrl)
   }
 
   /**
@@ -177,10 +190,6 @@ export class WalletLink {
    * all potential stale state is cleared.
    */
   public disconnect(): void {
-    if (typeof window.walletLinkExtension !== "undefined") {
-      window.walletLinkExtension.close()
-    } else {
-      this._relay?.resetAndReload()
-    }
+    this._relay?.resetAndReload()
   }
 }

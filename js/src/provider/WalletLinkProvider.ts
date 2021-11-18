@@ -2,39 +2,42 @@
 // Copyright (c) 2018-2020 Coinbase, Inc. <https://www.coinbase.com/>
 // Licensed under the Apache License, version 2.0
 
+import SafeEventEmitter from "@metamask/safe-event-emitter"
 import BN from "bn.js"
+import { ethErrors, serializeError } from "eth-rpc-errors"
 import { WalletLinkAnalytics } from "../connection/WalletLinkAnalytics"
+import { EthereumChain } from "../EthereumChain"
 import { EVENTS, WalletLinkAnalyticsAbstract } from "../init"
+import { ScopedLocalStorage } from "../lib/ScopedLocalStorage"
 import { EthereumTransactionParams } from "../relay/EthereumTransactionParams"
+import { Session } from "../relay/Session"
+import {
+  LOCAL_STORAGE_ADDRESSES_KEY,
+  WalletLinkRelayAbstract
+} from "../relay/WalletLinkRelayAbstract"
+import { WalletLinkRelayEventManager } from "../relay/WalletLinkRelayEventManager"
 import { RequestEthereumAccountsResponse } from "../relay/Web3Response"
 import { AddressString, Callback, IntNumber } from "../types"
 import {
   ensureAddressString,
   ensureBN,
   ensureBuffer,
-  ensureParsedJSONObject,
   ensureHexString,
   ensureIntNumber,
+  ensureParsedJSONObject,
   ensureRegExpString,
-  prepend0x,
   hexStringFromIntNumber,
-} from "../util";
+  prepend0x
+} from "../util"
 import eip712 from "../vendor-js/eth-eip712-util"
 import { FilterPolyfill } from "./FilterPolyfill"
 import { JSONRPCMethod, JSONRPCRequest, JSONRPCResponse } from "./JSONRPC"
-import { Web3Provider, RequestArguments } from "./Web3Provider"
-import { ethErrors, serializeError } from "eth-rpc-errors"
-import SafeEventEmitter from "@metamask/safe-event-emitter"
 import {
   SubscriptionManager,
   SubscriptionNotification,
   SubscriptionResult
 } from "./SubscriptionManager"
-import { ScopedLocalStorage } from "../lib/ScopedLocalStorage"
-import { WalletLinkRelayEventManager } from "../relay/WalletLinkRelayEventManager"
-import { LOCAL_STORAGE_ADDRESSES_KEY, WalletLinkRelayAbstract } from "../relay/WalletLinkRelayAbstract"
-import { EthereumChain } from '../EthereumChain';
-import { Session } from "../relay/Session"
+import { RequestArguments, Web3Provider } from "./Web3Provider"
 
 const DEFAULT_CHAIN_ID_KEY = "DefaultChainId"
 // Indicates chain has been switched by switchEthereumChain or addEthereumChain request
@@ -52,7 +55,8 @@ export interface WalletLinkProviderOptions {
 
 export class WalletLinkProvider
   extends SafeEventEmitter
-  implements Web3Provider {
+  implements Web3Provider
+{
   // So dapps can easily identify Coinbase Wallet for enabling features like 3085 network switcher menus
   public readonly isCoinbaseWallet = true
 
@@ -171,11 +175,12 @@ export class WalletLinkProvider
   }
 
   private updateProviderInfo(
-    jsonRpcUrl: string, 
-    chainId: number, 
-    fromRelay: boolean,
+    jsonRpcUrl: string,
+    chainId: number,
+    fromRelay: boolean
   ) {
-    const hasChainSwitched = this._storage.getItem(HAS_CHAIN_BEEN_SWITCHED_KEY) === "true"
+    const hasChainSwitched =
+      this._storage.getItem(HAS_CHAIN_BEEN_SWITCHED_KEY) === "true"
     if (hasChainSwitched && fromRelay) return
     if (fromRelay) {
       this.isChainOverridden = true
@@ -371,7 +376,6 @@ export class WalletLinkProvider
     }
     return res.result
   }
-
 
   public supportsSubscriptions(): boolean {
     return false
@@ -660,8 +664,10 @@ export class WalletLinkProvider
     const data = tx.data ? ensureBuffer(tx.data) : Buffer.alloc(0)
     const nonce = tx.nonce != null ? ensureIntNumber(tx.nonce) : null
     const gasPriceInWei = tx.gasPrice != null ? ensureBN(tx.gasPrice) : null
-    const maxFeePerGas = tx.maxFeePerGas != null ? ensureBN(tx.maxFeePerGas) : null
-    const maxPriorityFeePerGas = tx.maxPriorityFeePerGas != null ? ensureBN(tx.maxPriorityFeePerGas) : null
+    const maxFeePerGas =
+      tx.maxFeePerGas != null ? ensureBN(tx.maxFeePerGas) : null
+    const maxPriorityFeePerGas =
+      tx.maxPriorityFeePerGas != null ? ensureBN(tx.maxPriorityFeePerGas) : null
     const gasLimit = tx.gas != null ? ensureBN(tx.gas) : null
     const chainId = this.getChainId()
 
@@ -936,35 +942,43 @@ export class WalletLinkProvider
   }
 
   private async _wallet_addEthereumChain(
-    params: unknown[],
+    params: unknown[]
   ): Promise<JSONRPCResponse> {
-    const request = (params[0]) as AddEthereumChainParams;
+    const request = params[0] as AddEthereumChainParams
 
-    const chainIdNumber = parseInt(request.chainId, 16);
-    const ethereumChain = EthereumChain.fromChainId(BigInt(chainIdNumber));
+    const chainIdNumber = parseInt(request.chainId, 16)
+    const ethereumChain = EthereumChain.fromChainId(BigInt(chainIdNumber))
     if (ethereumChain === undefined) {
-      return { jsonrpc: '2.0', id: 0, error: { code: 2, message: `chainId ${request.chainId} not supported` } };
+      return {
+        jsonrpc: "2.0",
+        id: 0,
+        error: { code: 2, message: `chainId ${request.chainId} not supported` }
+      }
     }
-    const rpcUrl = EthereumChain.rpcUrl(ethereumChain);
+    const rpcUrl = EthereumChain.rpcUrl(ethereumChain)
     // @ts-ignore
-    await this.switchEthereumChain(rpcUrl, parseInt(request.chainId, 16));
+    await this.switchEthereumChain(rpcUrl, parseInt(request.chainId, 16))
 
-    return { jsonrpc: '2.0', id: 0, result: null };
+    return { jsonrpc: "2.0", id: 0, result: null }
   }
 
   private async _wallet_switchEthereumChain(
     params: unknown[]
   ): Promise<JSONRPCResponse> {
-    const request = (params[0]) as SwitchEthereumChainParams
+    const request = params[0] as SwitchEthereumChainParams
 
-    const chainIdNumber = parseInt(request.chainId, 16);
-    const ethereumChain = EthereumChain.fromChainId(BigInt(chainIdNumber));
+    const chainIdNumber = parseInt(request.chainId, 16)
+    const ethereumChain = EthereumChain.fromChainId(BigInt(chainIdNumber))
     if (ethereumChain === undefined) {
-      return { jsonrpc: '2.0', id: 0, error: { code: 2, message: `chainId ${request.chainId} not supported` } };
+      return {
+        jsonrpc: "2.0",
+        id: 0,
+        error: { code: 2, message: `chainId ${request.chainId} not supported` }
+      }
     }
-    const rpcUrl = EthereumChain.rpcUrl(ethereumChain);
+    const rpcUrl = EthereumChain.rpcUrl(ethereumChain)
     // @ts-ignore
-    await this.switchEthereumChain(rpcUrl, parseInt(request.chainId, 16));
+    await this.switchEthereumChain(rpcUrl, parseInt(request.chainId, 16))
 
     return { jsonrpc: "2.0", id: 0, result: null }
   }
@@ -1006,11 +1020,11 @@ export class WalletLinkProvider
     }
 
     return this._relayProvider().then(relay => {
-      relay.setAccountsCallback((accounts) => this._setAddresses(accounts))
-      relay.setChainIdCallback((chainId) => {
+      relay.setAccountsCallback(accounts => this._setAddresses(accounts))
+      relay.setChainIdCallback(chainId => {
         this.updateProviderInfo(this._jsonRpcUrl, parseInt(chainId, 10), true)
       })
-      relay.setJsonRpcUrlCallback((jsonRpcUrl) => {
+      relay.setJsonRpcUrlCallback(jsonRpcUrl => {
         this.updateProviderInfo(jsonRpcUrl, this.getChainId(), true)
       })
       this._relay = relay
@@ -1020,15 +1034,15 @@ export class WalletLinkProvider
 }
 
 interface AddEthereumChainParams {
-  chainId: string,
-  blockExplorerUrls?: string[],
-  chainName?: string,
+  chainId: string
+  blockExplorerUrls?: string[]
+  chainName?: string
   iconUrls?: string[]
-  rpcUrls?: string[],
+  rpcUrls?: string[]
   nativeCurrency?: {
-    name: string;
-    symbol: string;
-    decimals: number;
+    name: string
+    symbol: string
+    decimals: number
   }
 }
 
