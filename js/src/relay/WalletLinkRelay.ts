@@ -14,6 +14,7 @@ import {
   tap,
   timeout
 } from "rxjs/operators"
+
 import { ServerMessageEvent } from "../connection/ServerMessage"
 import { WalletLinkAnalytics } from "../connection/WalletLinkAnalytics"
 import { WalletLinkConnection } from "../connection/WalletLinkConnection"
@@ -31,17 +32,18 @@ import { EthereumTransactionParams } from "./EthereumTransactionParams"
 import { RelayMessage } from "./RelayMessage"
 import { Session } from "./Session"
 import {
+  APP_VERSION_KEY,
   CancelablePromise,
   LOCAL_STORAGE_ADDRESSES_KEY,
-  WalletLinkRelayAbstract,
-  WALLET_USER_NAME_KEY
+  WALLET_USER_NAME_KEY,
+  WalletLinkRelayAbstract
 } from "./WalletLinkRelayAbstract"
 import { WalletLinkRelayEventManager } from "./WalletLinkRelayEventManager"
 import { Web3Method } from "./Web3Method"
 import {
   AddEthereumChainRequest,
-  GenericRequest,
   EthereumAddressFromSignedMessageRequest,
+  GenericRequest,
   RequestEthereumAccountsRequest,
   ScanQRCodeRequest,
   SignEthereumMessageRequest,
@@ -54,9 +56,9 @@ import { Web3RequestCanceledMessage } from "./Web3RequestCanceledMessage"
 import { Web3RequestMessage } from "./Web3RequestMessage"
 import {
   AddEthereumChainResponse,
-  GenericResponse,
   ErrorResponse,
   EthereumAddressFromSignedMessageResponse,
+  GenericResponse,
   isRequestEthereumAccountsResponse,
   RequestEthereumAccountsResponse,
   ScanQRCodeResponse,
@@ -93,7 +95,9 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
   protected readonly walletLinkAnalytics: WalletLinkAnalyticsAbstract | null
   private readonly connection: WalletLinkConnection
   private accountsCallback: ((account: [string]) => void) | null = null
-  private chainCallback: ((chainId: string, jsonRpcUrl: string) => void) | null = null
+  private chainCallback:
+    | ((chainId: string, jsonRpcUrl: string) => void)
+    | null = null
 
   private ui: WalletLinkUI
 
@@ -123,7 +127,7 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
     this.subscriptions.add(
       this.connection.incomingEvent$
         .pipe(filter(m => m.event === "Web3Response"))
-        .subscribe({ next: this.handleIncomingEvent })
+        .subscribe({ next: this.handleIncomingEvent }) // eslint-disable-line @typescript-eslint/unbound-method
     )
 
     this.subscriptions.add(
@@ -179,14 +183,45 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
             this.storage.setItem(WALLET_USER_NAME_KEY, walletUsername)
           },
           error: () => {
-            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {message: 'Had error decrypting', value: 'username'})
+            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {
+              message: "Had error decrypting",
+              value: "username"
+            })
           }
         })
     )
 
     this.subscriptions.add(
       this.connection.sessionConfig$
-        .pipe(filter(c => c.metadata && c.metadata.ChainId !== undefined && c.metadata.JsonRpcUrl !== undefined))
+        .pipe(filter(c => c.metadata && c.metadata.AppVersion !== undefined))
+        .pipe(
+          mergeMap(c =>
+            aes256gcm.decrypt(c.metadata.AppVersion!, this._session.secret)
+          )
+        )
+        .subscribe({
+          next: appVersion => {
+            this.storage.setItem(APP_VERSION_KEY, appVersion)
+          },
+          error: () => {
+            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {
+              message: "Had error decrypting",
+              value: "appversion"
+            })
+          }
+        })
+    )
+
+    this.subscriptions.add(
+      this.connection.sessionConfig$
+        .pipe(
+          filter(
+            c =>
+              c.metadata &&
+              c.metadata.ChainId !== undefined &&
+              c.metadata.JsonRpcUrl !== undefined
+          )
+        )
         .pipe(
           mergeMap(c =>
             zip(
@@ -199,11 +234,14 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
         .subscribe({
           next: ([chainId, jsonRpcUrl]) => {
             if (this.chainCallback) {
-              this.chainCallback(chainId!, jsonRpcUrl)
+              this.chainCallback(chainId, jsonRpcUrl)
             }
           },
           error: () => {
-            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {message: 'Had error decrypting', value: 'chainId|jsonRpcUrl'})
+            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {
+              message: "Had error decrypting",
+              value: "chainId|jsonRpcUrl"
+            })
           }
         })
     )
@@ -243,7 +281,10 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
             }
           },
           error: () => {
-            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {message: 'Had error decrypting', value: 'selectedAddress'})
+            this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {
+              message: "Had error decrypting",
+              value: "selectedAddress"
+            })
           }
         })
     )
@@ -290,7 +331,7 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
           this.storage.clear()
           this.ui.reloadUI()
         },
-        err => {
+        (err: string) => {
           this.walletLinkAnalytics?.sendEvent(EVENTS.FAILURE, {
             method: "relay::resetAndReload",
             message: `faled to reset and relod with ${err}`,
@@ -453,7 +494,10 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
     })
   }
 
-  public genericRequest(data: object, action: string): CancelablePromise<GenericResponse> {
+  public genericRequest(
+    data: object,
+    action: string
+  ): CancelablePromise<GenericResponse> {
     return this.sendRequest<GenericRequest, GenericResponse>({
       method: Web3Method.generic,
       params: {
@@ -465,15 +509,21 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
 
   public addEthereumChain(
     chainId: string,
+    rpcUrls: string[],
     blockExplorerUrls?: string[],
     chainName?: string,
     iconUrls?: string[],
-    nativeCurrency?: { name: string; symbol: string; decimals: number }
+    nativeCurrency?: {
+      name: string;
+      symbol: string;
+      decimals: number;
+    }
   ): CancelablePromise<AddEthereumChainResponse> {
     return this.sendRequest<AddEthereumChainRequest, AddEthereumChainResponse>({
       method: Web3Method.addEthereumChain,
       params: {
         chainId,
+        rpcUrls,
         blockExplorerUrls,
         chainName,
         iconUrls,
@@ -482,8 +532,10 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
     })
   }
 
-  public sendGenericMessage(request: GenericRequest): CancelablePromise<GenericResponse> {
-    return this.sendRequest(request);
+  public sendGenericMessage(
+    request: GenericRequest
+  ): CancelablePromise<GenericResponse> {
+    return this.sendRequest(request)
   }
 
   public sendRequest<T extends Web3Request, U extends Web3Response>(
@@ -501,6 +553,7 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
       )
       hideSnackbarItem?.()
     }
+
     const promise = new Promise<U>((resolve, reject) => {
       const isRequestAccounts =
         request.method === Web3Method.requestEthereumAccounts
@@ -543,37 +596,37 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
         request.method === Web3Method.switchEthereumChain ||
         request.method === Web3Method.addEthereumChain
       ) {
-        const cancel = () => {
+        const _cancel = () => {
           this.handleWeb3ResponseMessage(
             Web3ResponseMessage({
               id,
-              response: SwitchEthereumChainResponse(false)
+              response: SwitchEthereumChainResponse({ isApproved: false, rpcUrl: "" })
             })
           )
         }
-        const approve = () => {
+        const approve = (rpcUrl: string) => {
           this.handleWeb3ResponseMessage(
             Web3ResponseMessage({
               id,
-              response: SwitchEthereumChainResponse(true)
+              response: SwitchEthereumChainResponse({ isApproved: true, rpcUrl })
             })
           )
         }
 
         this.ui.switchEthereumChain({
-          onCancel: cancel,
+          onCancel: _cancel,
           onApprove: approve,
           chainId: (request as SwitchEthereumChainRequest).params.chainId
         })
 
         if (!this.ui.inlineSwitchEthereumChain()) {
           hideSnackbarItem = this.ui.showConnecting({
-            onCancel: cancel,
-            onResetConnection: this.resetAndReload
+            onCancel: _cancel,
+            onResetConnection: this.resetAndReload // eslint-disable-line @typescript-eslint/unbound-method
           })
         }
       } else if (this.ui.isStandalone()) {
-        const onCancel = () => {
+        const _cancel = () => {
           this.handleWeb3ResponseMessage(
             Web3ResponseMessage({
               id,
@@ -592,7 +645,7 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
           this.handleWeb3ResponseMessage(
             Web3ResponseMessage({
               id,
-              response: response
+              response
             })
           )
         }
@@ -600,39 +653,39 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
         switch (request.method) {
           case Web3Method.signEthereumMessage:
             this.ui.signEthereumMessage({
-              request: request as SignEthereumMessageRequest,
+              request ,
               onSuccess,
-              onCancel
+              onCancel: _cancel
             })
             break
           case Web3Method.signEthereumTransaction:
             this.ui.signEthereumTransaction({
-              request: request as SignEthereumTransactionRequest,
+              request ,
               onSuccess,
-              onCancel
+              onCancel: _cancel
             })
             break
           case Web3Method.submitEthereumTransaction:
             this.ui.submitEthereumTransaction({
-              request: request as SubmitEthereumTransactionRequest,
+              request ,
               onSuccess,
-              onCancel
+              onCancel: _cancel
             })
             break
           case Web3Method.ethereumAddressFromSignedMessage:
             this.ui.ethereumAddressFromSignedMessage({
-              request: request as EthereumAddressFromSignedMessageRequest,
+              request ,
               onSuccess
             })
             break
           default:
-            onCancel()
+            _cancel()
             break
         }
       } else {
         hideSnackbarItem = this.ui.showConnecting({
           onCancel: cancel,
-          onResetConnection: this.resetAndReload
+          onResetConnection: this.resetAndReload  // eslint-disable-line @typescript-eslint/unbound-method
         })
       }
 
@@ -668,7 +721,9 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
     this.accountsCallback = accountsCallback
   }
 
-  public setChainCallback(chainCallback: (chainId: string, jsonRpcUrl: string) => void) {
+  public setChainCallback(
+    chainCallback: (chainId: string, jsonRpcUrl: string) => void
+  ) {
     this.chainCallback = chainCallback
   }
 
@@ -705,7 +760,7 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
   ): Observable<string> {
     const secret = this.session.secret
     return new Observable<string>(subscriber => {
-      aes256gcm
+      void aes256gcm
         .encrypt(
           JSON.stringify({ ...message, origin: location.origin }),
           secret
@@ -738,7 +793,10 @@ export class WalletLinkRelay implements WalletLinkRelayAbstract {
               this.handleWeb3ResponseMessage(message)
             },
             error: () => {
-              this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {message: 'Had error decrypting', value: 'incomingEvent'})
+              this.walletLinkAnalytics?.sendEvent(EVENTS.GENERAL_ERROR, {
+                message: "Had error decrypting",
+                value: "incomingEvent"
+              })
             }
           })
       )

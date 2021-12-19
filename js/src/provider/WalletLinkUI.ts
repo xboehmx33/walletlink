@@ -1,4 +1,5 @@
 import { Observable } from "rxjs"
+
 import { Session } from "../relay/Session"
 import {
   EthereumAddressFromSignedMessageRequest,
@@ -38,7 +39,7 @@ export abstract class WalletLinkUI {
 
   abstract switchEthereumChain(options: {
     onCancel: () => void
-    onApprove: () => void
+    onApprove: (rpcUrl: string) => void
     chainId: string
   }): void
 
